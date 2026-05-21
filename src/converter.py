@@ -28,7 +28,7 @@ def _is_heading(paragraph):
 
 
 def _cache_path(text, voice):
-    key = hashlib.sha256(f"{voice}:{text}".encode()).hexdigest()
+    key = hashlib.sha256(f"{voice}:{text}".encode()).hexdigest()[:16]
     return os.path.join(CACHE_DIR, f"{key}.mp3")
 
 
@@ -73,17 +73,16 @@ def _build_audio(paragraphs):
         TextColumn("[bold cyan]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
-        TextColumn("[dim]{task.fields[preview]}"),
         console=console,
-        transient=True,
+        transient=False,
     ) as progress:
-        task = progress.add_task(
-            "Converting", total=len(paragraphs), preview=""
-        )
+        task = progress.add_task("Converting", total=len(paragraphs))
         for para in paragraphs:
             text = para.text.strip()
-            preview = text[:50] + "…" if len(text) > 50 else text
-            progress.update(task, preview=preview)
+            is_heading = _is_heading(para)
+            style = "bold yellow" if is_heading else "white"
+            preview = text[:80] + "…" if len(text) > 80 else text
+            progress.console.print(f"  [{style}]{preview}[/{style}]")
             combined += _para_to_segment(para)
             progress.advance(task)
     return combined
