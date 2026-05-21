@@ -16,8 +16,8 @@ VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
 # Silence durations in milliseconds
-PAUSE_AFTER_HEADING_MS = 900
-PAUSE_AFTER_PARAGRAPH_MS = 500
+PAUSE_AFTER_HEADING_MS = 1400
+PAUSE_AFTER_PARAGRAPH_MS = 1000
 
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "docx_to_mp3", "tts")
 
@@ -88,19 +88,26 @@ def _build_audio(paragraphs):
     return combined
 
 
-def _print_summary(mp3_path, combined):
-    size_kb = os.path.getsize(mp3_path) / 1024
+def _print_summary(mp3_path, combined, paragraphs):
+    size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
     duration_s = len(combined) / 1000
     minutes, seconds = divmod(int(duration_s), 60)
-    kbps = (size_kb * 8) / duration_s if duration_s > 0 else 0
+    kbps = (size_mb * 1024 * 8) / duration_s if duration_s > 0 else 0
+
+    all_text = " ".join(p.text.strip() for p in paragraphs)
+    word_count = len(all_text.split())
+    char_count = len(all_text)
 
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column(style="bold green")
     table.add_column(style="white")
     table.add_row("Saved", mp3_path)
-    table.add_row("Size", f"{size_kb:.1f} KB")
+    table.add_row("Size", f"{size_mb:.2f} MB")
     table.add_row("Duration", f"{minutes}:{seconds:02d}")
-    table.add_row("Bitrate", f"{kbps:.0f} kbps")
+    table.add_row("Bitrate", f"{kbps:,.0f} kbps")
+    table.add_row("Paragraphs", f"{len(paragraphs):,}")
+    table.add_row("Words", f"{word_count:,}")
+    table.add_row("Characters", f"{char_count:,}")
     console.print(table)
 
 
@@ -110,4 +117,4 @@ def convert(docx_path: str, mp3_path: str) -> None:
     combined = _build_audio(paragraphs)
     os.makedirs(os.path.dirname(os.path.abspath(mp3_path)), exist_ok=True)
     combined.export(mp3_path, format="mp3")
-    _print_summary(mp3_path, combined)
+    _print_summary(mp3_path, combined, paragraphs)
