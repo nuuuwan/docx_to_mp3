@@ -1,0 +1,99 @@
+import os
+import subprocess
+import tempfile
+
+from docx import Document
+from pydub import AudioSegment
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
+from rich.table import Table
+
+console = Console()
+
+# Voices: Daniel (en_GB) for headings, Kathy (en_US) for body
+VOICE_HEADING = "Daniel"
+VOICE_BODY = "Serena"
+
+# Silence durations in milliseconds
+PAUSE_AFTER_HEADING_MS = 900
+PAUSE_AFTER_PARAGRAPH_MS = 500
+
+
+def _is_heading(paragraph):
+    style = paragraph.style.name
+    return style.startswith("Heading") or style in ("Title", "Subtitle")
+
+
+def _say_to_aiff(text, voice, output_path):
+    subprocess.run(
+        ["say", "-v", voice, "-o", output_path, "--", text],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _para_to_segment(para):
+    text = para.text.strip()
+    is_heading = _is_heading(para)
+    voice = VOICE_HEADING if is_heading else VOICE_BODY
+    pause_ms = (
+        PAUSE_AFTER_HEADING_MS if is_heading else PAUSE_AFTER_PARAGRAPH_MS
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        _say_to_aiff(text, voice, tmp_path)
+        segment = AudioSegment.from_file(tmp_path, format="aiff")
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return segment + AudioSegment.silent(duration=pause_ms)
+
+
+def _build_audio(paragraphs):
+    combined = AudioSegment.empty()
+    with Progress(
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("[dim]{task.fields[preview]}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(
+            "Converting", total=len(paragraphs), preview=""
+        )
+        for para in paragraphs:
+            text = para.text.strip()
+            preview = text[:50] + "…" if len(text) > 50 else text
+            progress.update(task, preview=preview)
+            combined += _para_to_segment(para)
+            progress.advance(task)
+    return combined
+
+
+def _print_summary(mp3_path, combined):
+    size_kb = os.path.getsize(mp3_path) / 1024
+    duration_s = len(combined) / 1000
+    minutes, seconds = divmod(int(duration_s), 60)
+    kbps = (size_kb * 8) / duration_s if duration_s > 0 else 0
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="bold green")
+    table.add_column(style="white")
+    table.add_row("Saved", mp3_path)
+    table.add_row("Size", f"{size_kb:.1f} KB")
+    table.add_row("Duration", f"{minutes}:{seconds:02d}")
+    table.add_row("Bitrate", f"{kbps:.0f} kbps")
+    console.print(table)
+
+
+def convert(docx_path: str, mp3_path: str) -> None:
+    """Convert a .docx file to an .mp3 using macOS TTS."""
+    paragraphs = [p for p in Document(docx_path).paragraphs if p.text.strip()]
+    combined = _build_audio(paragraphs)
+    os.makedirs(os.path.dirname(os.path.abspath(mp3_path)), exist_ok=True)
+    combined.export(mp3_path, format="mp3")
+    _print_summary(mp3_path, combined)

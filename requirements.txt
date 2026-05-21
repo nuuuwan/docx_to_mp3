@@ -1,1 +1,4 @@
 utils-nuuuwan
+python-docx
+pydub
+rich
