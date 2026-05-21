@@ -19,7 +19,7 @@ VOICE_BODY = "Serena"
 PAUSE_AFTER_HEADING_MS = 900
 PAUSE_AFTER_PARAGRAPH_MS = 500
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache", "tts")
+CACHE_DIR = os.path.join(tempfile.gettempdir(), "docx_to_mp3", "tts")
 
 
 def _is_heading(paragraph):
