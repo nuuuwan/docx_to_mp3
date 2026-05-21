@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -11,12 +12,14 @@ from rich.table import Table
 console = Console()
 
 # Voices: Daniel (en_GB) for headings, Kathy (en_US) for body
-VOICE_HEADING = "Daniel"
+VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
 # Silence durations in milliseconds
 PAUSE_AFTER_HEADING_MS = 900
 PAUSE_AFTER_PARAGRAPH_MS = 500
+
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache", "tts")
 
 
 def _is_heading(paragraph):
@@ -24,12 +27,26 @@ def _is_heading(paragraph):
     return style.startswith("Heading") or style in ("Title", "Subtitle")
 
 
-def _say_to_aiff(text, voice, output_path):
-    subprocess.run(
-        ["say", "-v", voice, "-o", output_path, "--", text],
-        check=True,
-        capture_output=True,
-    )
+def _cache_path(text, voice):
+    key = hashlib.sha256(f"{voice}:{text}".encode()).hexdigest()
+    return os.path.join(CACHE_DIR, f"{key}.mp3")
+
+
+def _say_to_mp3(text, voice, output_path):
+    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        subprocess.run(
+            ["say", "-v", voice, "-o", tmp_path, "--", text],
+            check=True,
+            capture_output=True,
+        )
+        AudioSegment.from_file(tmp_path, format="aiff").export(
+            output_path, format="mp3"
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def _para_to_segment(para):
@@ -40,16 +57,14 @@ def _para_to_segment(para):
         PAUSE_AFTER_HEADING_MS if is_heading else PAUSE_AFTER_PARAGRAPH_MS
     )
 
-    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        _say_to_aiff(text, voice, tmp_path)
-        segment = AudioSegment.from_file(tmp_path, format="aiff")
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    cached = _cache_path(text, voice)
+    if not os.path.exists(cached):
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        _say_to_mp3(text, voice, cached)
 
-    return segment + AudioSegment.silent(duration=pause_ms)
+    return AudioSegment.from_mp3(cached) + AudioSegment.silent(
+        duration=pause_ms
+    )
 
 
 def _build_audio(paragraphs):
