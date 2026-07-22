@@ -69,8 +69,21 @@ def _say_to_mp3(text, voice, output_path):
             os.unlink(tmp_path)
 
 
+PAUSE_AFTER_SEPARATOR_MS = 2000
+
+# Texts that should produce silence instead of being read aloud
+_SEPARATOR_TEXTS = {"---", "...", "\u2026", "***", "* * *", "- - -"}
+
+
+def _is_separator(text):
+    return text in _SEPARATOR_TEXTS or set(text).issubset(set("-*~ \t"))
+
+
 def _para_to_segment(para):
     text = para.text.strip()
+    if _is_separator(text):
+        return AudioSegment.silent(duration=PAUSE_AFTER_SEPARATOR_MS)
+
     is_heading = _is_heading(para)
     voice = VOICE_HEADING if is_heading else VOICE_BODY
     pause_ms = (
@@ -196,7 +209,9 @@ def convert(docx_path: str, output_dir: str) -> None:
     if current_ms > 0:
         total_ms += current_ms
         paths.append(
-            _flush_chunk(current_audio, current_label, chunk_index, output_dir)
+            _flush_chunk(
+                current_audio, current_label, chunk_index, output_dir
+            )
         )
 
     _print_summary(output_dir, paths, total_ms, paragraphs)
