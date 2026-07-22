@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 
@@ -11,20 +12,39 @@ from rich.table import Table
 
 console = Console()
 
-# Voices: Daniel (en_GB) for headings, Kathy (en_US) for body
 VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
-# Silence durations in milliseconds
 PAUSE_AFTER_HEADING_MS = 1400
 PAUSE_AFTER_PARAGRAPH_MS = 1000
 
+# Hard cap per output file: 10 minutes
+MAX_CHUNK_MS = 10 * 60 * 1000
+
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "docx_to_mp3", "tts")
+
+# Paragraph styles that represent metadata / navigation rather than content
+_SKIP_STYLE_PREFIXES = ("toc", "index", "bibliography", "caption")
+_SKIP_STYLES_EXACT = {
+    "TOC Heading",
+    "Caption",
+    "Header",
+    "Footer",
+}
 
 
 def _is_heading(paragraph):
     style = paragraph.style.name
     return style.startswith("Heading") or style in ("Title", "Subtitle")
+
+
+def _is_metadata(paragraph):
+    """Return True for TOC entries, captions, headers, footers, etc."""
+    name = paragraph.style.name
+    if name in _SKIP_STYLES_EXACT:
+        return True
+    lower = name.lower()
+    return any(lower.startswith(prefix) for prefix in _SKIP_STYLE_PREFIXES)
 
 
 def _cache_path(text, voice):
@@ -67,8 +87,68 @@ def _para_to_segment(para):
     )
 
 
-def _build_audio(paragraphs):
-    combined = AudioSegment.empty()
+def _slugify(text, max_len=40):
+    """Convert heading text to a safe filename fragment."""
+    slug = re.sub(r"[^\w\s-]", "", text.lower())
+    slug = re.sub(r"[\s_-]+", "_", slug).strip("_")
+    return slug[:max_len] if slug else "part"
+
+
+def _flush_chunk(audio, label, index, output_dir):
+    """Export a completed chunk to disk immediately and return its path."""
+    slug = _slugify(label) if label else f"part_{index}"
+    filename = f"{index:03d}_{slug}.mp3"
+    out_path = os.path.join(output_dir, filename)
+    audio.export(out_path, format="mp3")
+
+    size_mb = os.path.getsize(out_path) / (1024 * 1024)
+    dur_s = len(audio) / 1000
+    mins, secs = divmod(int(dur_s), 60)
+    console.print(
+        f"  [green]{filename}[/green]  "
+        f"[white]{mins}:{secs:02d}  {size_mb:.2f} MB[/white]"
+    )
+    return out_path
+
+
+def _print_summary(output_dir, paths, total_ms, paragraphs):
+    total_size_mb = sum(os.path.getsize(p) / (1024 * 1024) for p in paths)
+    mins, secs = divmod(int(total_ms / 1000), 60)
+    all_text = " ".join(p.text.strip() for p in paragraphs)
+    word_count = len(all_text.split())
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="bold green")
+    table.add_column(style="white")
+    table.add_row("Output folder", output_dir)
+    table.add_row("Files", str(len(paths)))
+    table.add_row("Total duration", f"{mins}:{secs:02d}")
+    table.add_row("Total size", f"{total_size_mb:.2f} MB")
+    table.add_row("Paragraphs", f"{len(paragraphs):,}")
+    table.add_row("Words", f"{word_count:,}")
+    console.print(table)
+
+
+def convert(docx_path: str, output_dir: str) -> None:
+    """Convert a .docx file to a folder of .mp3 files split by heading and duration.
+
+    Each chunk is written to disk the moment its duration cap is reached,
+    so memory stays bounded and files appear incrementally.
+    """
+    paragraphs = [
+        p
+        for p in Document(docx_path).paragraphs
+        if p.text.strip() and not _is_metadata(p)
+    ]
+    os.makedirs(output_dir, exist_ok=True)
+
+    paths = []
+    chunk_index = 1
+    current_label = ""
+    current_audio = AudioSegment.empty()
+    current_ms = 0
+    total_ms = 0
+
     with Progress(
         TextColumn("[bold cyan]{task.description}"),
         BarColumn(),
@@ -80,41 +160,45 @@ def _build_audio(paragraphs):
         for para in paragraphs:
             text = para.text.strip()
             is_heading = _is_heading(para)
-            style = "bold yellow" if is_heading else "white"
-            preview = text[:80] + "…" if len(text) > 80 else text
-            progress.console.print(f"  [{style}]{preview}[/{style}]")
-            combined += _para_to_segment(para)
+            style_tag = "bold yellow" if is_heading else "white"
+            preview = text[:80] + "\u2026" if len(text) > 80 else text
+            progress.console.print(f"  [{style_tag}]{preview}[/{style_tag}]")
+
+            seg = _para_to_segment(para)
+            seg_ms = len(seg)
+
+            # Flush at heading boundary or when the cap would be exceeded
+            should_split = (is_heading and current_ms > 0) or (
+                current_ms + seg_ms > MAX_CHUNK_MS and current_ms > 0
+            )
+
+            if should_split:
+                total_ms += current_ms
+                paths.append(
+                    _flush_chunk(
+                        current_audio, current_label, chunk_index, output_dir
+                    )
+                )
+                chunk_index += 1
+                current_audio = AudioSegment.empty()
+                current_ms = 0
+                if is_heading:
+                    current_label = text
+
+            if is_heading and current_ms == 0:
+                current_label = text
+
+            current_audio += seg
+            current_ms += seg_ms
             progress.advance(task)
-    return combined
 
+    # Flush the final chunk
+    if current_ms > 0:
+        total_ms += current_ms
+        paths.append(
+            _flush_chunk(
+                current_audio, current_label, chunk_index, output_dir
+            )
+        )
 
-def _print_summary(mp3_path, combined, paragraphs):
-    size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
-    duration_s = len(combined) / 1000
-    minutes, seconds = divmod(int(duration_s), 60)
-    kbps = (size_mb * 1024 * 8) / duration_s if duration_s > 0 else 0
-
-    all_text = " ".join(p.text.strip() for p in paragraphs)
-    word_count = len(all_text.split())
-    char_count = len(all_text)
-
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(style="bold green")
-    table.add_column(style="white")
-    table.add_row("Saved", mp3_path)
-    table.add_row("Size", f"{size_mb:.2f} MB")
-    table.add_row("Duration", f"{minutes}:{seconds:02d}")
-    table.add_row("Bitrate", f"{kbps:,.0f} kbps")
-    table.add_row("Paragraphs", f"{len(paragraphs):,}")
-    table.add_row("Words", f"{word_count:,}")
-    table.add_row("Characters", f"{char_count:,}")
-    console.print(table)
-
-
-def convert(docx_path: str, mp3_path: str) -> None:
-    """Convert a .docx file to an .mp3 using macOS TTS."""
-    paragraphs = [p for p in Document(docx_path).paragraphs if p.text.strip()]
-    combined = _build_audio(paragraphs)
-    os.makedirs(os.path.dirname(os.path.abspath(mp3_path)), exist_ok=True)
-    combined.export(mp3_path, format="mp3")
-    _print_summary(mp3_path, combined, paragraphs)
+    _print_summary(output_dir, paths, total_ms, paragraphs)
