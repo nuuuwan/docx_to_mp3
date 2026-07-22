@@ -15,8 +15,8 @@ console = Console()
 VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
-PAUSE_AFTER_HEADING_MS = 1400
-PAUSE_AFTER_PARAGRAPH_MS = 1000
+PAUSE_AFTER_HEADING_MS = 1000
+PAUSE_AFTER_PARAGRAPH_MS = 500
 
 # Hard cap per output file: 10 minutes
 MAX_CHUNK_MS = 10 * 60 * 1000
@@ -209,9 +209,7 @@ def convert(docx_path: str, output_dir: str) -> None:
     if current_ms > 0:
         total_ms += current_ms
         paths.append(
-            _flush_chunk(
-                current_audio, current_label, chunk_index, output_dir
-            )
+            _flush_chunk(current_audio, current_label, chunk_index, output_dir)
         )
 
     _print_summary(output_dir, paths, total_ms, paragraphs)
