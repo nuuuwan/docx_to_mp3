@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 
@@ -86,9 +87,17 @@ def _para_to_segment(para):
     )
 
 
-def _flush_chunk(audio, index, output_dir):
+def _slugify(text, max_len=40):
+    """Convert heading text to a safe filename fragment."""
+    slug = re.sub(r"[^\w\s-]", "", text.lower())
+    slug = re.sub(r"[\s_-]+", "_", slug).strip("_")
+    return slug[:max_len] if slug else "part"
+
+
+def _flush_chunk(audio, label, index, output_dir):
     """Export a completed chunk to disk immediately and return its path."""
-    filename = f"{index:03d}.mp3"
+    slug = _slugify(label) if label else f"part_{index}"
+    filename = f"{index:03d}_{slug}.mp3"
     out_path = os.path.join(output_dir, filename)
     audio.export(out_path, format="mp3")
 
@@ -135,6 +144,7 @@ def convert(docx_path: str, output_dir: str) -> None:
 
     paths = []
     chunk_index = 1
+    current_label = ""
     current_audio = AudioSegment.empty()
     current_ms = 0
     total_ms = 0
@@ -149,21 +159,34 @@ def convert(docx_path: str, output_dir: str) -> None:
         task = progress.add_task("Converting", total=len(paragraphs))
         for para in paragraphs:
             text = para.text.strip()
+            is_heading = _is_heading(para)
+            style_tag = "bold yellow" if is_heading else "white"
             preview = text[:80] + "\u2026" if len(text) > 80 else text
-            progress.console.print(f"  [white]{preview}[/white]")
+            progress.console.print(f"  [{style_tag}]{preview}[/{style_tag}]")
 
             seg = _para_to_segment(para)
             seg_ms = len(seg)
 
-            # Flush when the cap would be exceeded
-            if current_ms + seg_ms > MAX_CHUNK_MS and current_ms > 0:
+            # Flush at a heading boundary or when the cap would be exceeded
+            should_split = (is_heading and current_ms > 0) or (
+                current_ms + seg_ms > MAX_CHUNK_MS and current_ms > 0
+            )
+
+            if should_split:
                 total_ms += current_ms
                 paths.append(
-                    _flush_chunk(current_audio, chunk_index, output_dir)
+                    _flush_chunk(
+                        current_audio, current_label, chunk_index, output_dir
+                    )
                 )
                 chunk_index += 1
                 current_audio = AudioSegment.empty()
                 current_ms = 0
+                if is_heading:
+                    current_label = text
+
+            if is_heading and current_ms == 0:
+                current_label = text
 
             current_audio += seg
             current_ms += seg_ms
@@ -172,6 +195,8 @@ def convert(docx_path: str, output_dir: str) -> None:
     # Flush the final chunk
     if current_ms > 0:
         total_ms += current_ms
-        paths.append(_flush_chunk(current_audio, chunk_index, output_dir))
+        paths.append(
+            _flush_chunk(current_audio, current_label, chunk_index, output_dir)
+        )
 
     _print_summary(output_dir, paths, total_ms, paragraphs)
