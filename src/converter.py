@@ -15,7 +15,8 @@ console = Console()
 VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
-PAUSE_AFTER_HEADING_MS = 1000
+PAUSE_BEFORE_HEADING_MS = 1000
+PAUSE_AFTER_HEADING_MS = 500
 PAUSE_AFTER_PARAGRAPH_MS = 500
 
 # Hard cap per output file: 10 minutes
@@ -86,7 +87,10 @@ def _para_to_segment(para):
 
     is_heading = _is_heading(para)
     voice = VOICE_HEADING if is_heading else VOICE_BODY
-    pause_ms = (
+
+    pause_before_ms = PAUSE_BEFORE_HEADING_MS if is_heading else 0
+
+    pause_after_ms = (
         PAUSE_AFTER_HEADING_MS if is_heading else PAUSE_AFTER_PARAGRAPH_MS
     )
 
@@ -95,8 +99,10 @@ def _para_to_segment(para):
         os.makedirs(CACHE_DIR, exist_ok=True)
         _say_to_mp3(text, voice, cached)
 
-    return AudioSegment.from_mp3(cached) + AudioSegment.silent(
-        duration=pause_ms
+    return (
+        AudioSegment.silent(duration=pause_before_ms)
+        + AudioSegment.from_mp3(cached)
+        + AudioSegment.silent(duration=pause_after_ms)
     )
 
 
