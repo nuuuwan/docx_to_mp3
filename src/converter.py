@@ -15,12 +15,11 @@ console = Console()
 VOICE_HEADING = "Jamie"
 VOICE_BODY = "Serena"
 
-PAUSE_BEFORE_HEADING_MS = 1000
+PAUSE_BEFORE_HEADING_MS = 500
 PAUSE_AFTER_HEADING_MS = 500
-PAUSE_AFTER_PARAGRAPH_MS = 500
+PAUSE_AFTER_PARAGRAPH_MS = 250
 
-# Hard cap per output file: 10 minutes
-MAX_CHUNK_MS = 10 * 60 * 1000
+MAX_CHUNK_MS = 60 * 60 * 1000
 
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "docx_to_mp3", "tts")
 
