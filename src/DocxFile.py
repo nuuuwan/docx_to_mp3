@@ -154,7 +154,7 @@ class DocxFile:
         current_paragraphs = []
 
         for para in doc.paragraphs:
-            if para.text.strip() == "":
+            if para.text.strip() in ["", "---", "***"]:
                 continue
             if para.style.name.startswith("Heading"):
                 if current_heading is not None:
