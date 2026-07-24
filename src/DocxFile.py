@@ -29,6 +29,10 @@ class TextToSpeechCache:
 
     @staticmethod
     def get_mp3(text: str, voice="Alex") -> str:
+        text = text.strip()
+        if len(text) == 0:
+            raise ValueError("Text cannot be empty")
+
         temp_mp3_path = TextToSpeechCache.get_temp_mp3_path(text, voice=voice)
 
         if os.path.exists(temp_mp3_path):
