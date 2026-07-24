@@ -40,6 +40,7 @@ class TextToSpeechCache:
             temp_mp3_path, format="mp3"
         )
         os.unlink(temp_aiff_path)
+        print(f"{temp_mp3_path} <- {voice}: {text}")
         return temp_mp3_path
 
 
