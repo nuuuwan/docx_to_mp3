@@ -3,10 +3,11 @@ import os
 import subprocess
 import tempfile
 from abc import ABC
-from functools import cache, cached_property
+from functools import cached_property
 
 from docx import Document
 from pydub import AudioSegment
+from tqdm import tqdm
 
 
 class TextToSpeechCache:
@@ -16,16 +17,24 @@ class TextToSpeechCache:
         DIR_TTS_CACHE = os.path.join(
             tempfile.gettempdir(), "docx_to_mp3", "tts_cache"
         )
-        os.makedirs(DIR_TTS_CACHE, exist_ok=True)
+        temp_mp3_path = os.path.join(DIR_TTS_CACHE, f"{h}.mp3")
 
-        temp_path = os.path.join(DIR_TTS_CACHE, f"{h}.mp3")
+        if os.path.exists(temp_mp3_path):
+            return temp_mp3_path
+
+        os.makedirs(DIR_TTS_CACHE, exist_ok=True)
+        temp_aiff_path = os.path.join(DIR_TTS_CACHE, f"{h}.aiff")
         subprocess.run(
-            ["say", "-v", voice, "-o", temp_path, "--", text],
+            ["say", "-v", voice, "-o", temp_aiff_path, "--", text],
             check=True,
             capture_output=True,
         )
-        print(f'"{text}" -> {temp_path}')
-        return temp_path
+
+        AudioSegment.from_file(temp_aiff_path, format="aiff").export(
+            temp_mp3_path, format="mp3"
+        )
+        os.unlink(temp_aiff_path)
+        return temp_mp3_path
 
 
 class Audible(ABC):
@@ -52,6 +61,10 @@ class Paragraph(Audible):
 
 
 class Chapter(Audible):
+    T_SILENCE_BEFORE_HEADING_MS = 250
+    T_SILENCE_AFTER_HEADING_MS = 500
+    T_SILENCE_AFTER_PARAGRAPH_MS = 250
+
     def __init__(
         self, i_chapter: int, title: str, paragraphs: list[Paragraph]
     ):
@@ -60,9 +73,18 @@ class Chapter(Audible):
         self.paragraphs = paragraphs
 
     def get_audio(self) -> AudioSegment:
-        audio = Heading(self.title).get_audio()
+        audio = (
+            AudioSegment.silent(duration=self.T_SILENCE_BEFORE_HEADING_MS)
+            + Heading(self.title).get_audio()
+            + AudioSegment.silent(duration=self.T_SILENCE_AFTER_HEADING_MS)
+        )
+
         for para in self.paragraphs:
             audio += para.get_audio()
+            audio += AudioSegment.silent(
+                duration=self.T_SILENCE_AFTER_PARAGRAPH_MS
+            )
+
         return audio
 
 
@@ -119,15 +141,12 @@ class DocxFile(Audible):
         output_chapters_dir = os.path.join(output_dir, "chapters")
         os.makedirs(output_chapters_dir, exist_ok=True)
 
-        for chapter in self.chapters:
+        for chapter in tqdm(self.chapters, desc="Chapters", unit="ch"):
             chapter_audio = chapter.get_audio()
             chapter_file_path = os.path.join(
                 output_chapters_dir, f"chapter-{chapter.i_chapter:02d}.mp3"
             )
             chapter_audio.export(chapter_file_path, format="mp3")
-            print(
-                f"Chapter {chapter.i_chapter} exported to {chapter_file_path}"
-            )
 
         # docx
         audio = self.get_audio()
