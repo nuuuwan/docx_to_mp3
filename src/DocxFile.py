@@ -1,8 +1,8 @@
 import hashlib
 import os
+import shutil
 import subprocess
 import tempfile
-from abc import ABC
 from functools import cached_property
 
 from docx import Document
@@ -11,19 +11,25 @@ from tqdm import tqdm
 
 
 class TextToSpeechCache:
+
     @staticmethod
-    def get_mp3(text: str, voice="Alex") -> str:
+    def get_temp_mp3_path(text: str, voice="Alex") -> str:
         h = hashlib.sha256(f"{voice}:{text}".encode()).hexdigest()[:16]
         DIR_TTS_CACHE = os.path.join(
             tempfile.gettempdir(), "docx_to_mp3", "tts_cache"
         )
         temp_mp3_path = os.path.join(DIR_TTS_CACHE, f"{h}.mp3")
+        return temp_mp3_path
+
+    @staticmethod
+    def get_mp3(text: str, voice="Alex") -> str:
+        temp_mp3_path = TextToSpeechCache.get_temp_mp3_path(text, voice=voice)
 
         if os.path.exists(temp_mp3_path):
             return temp_mp3_path
 
-        os.makedirs(DIR_TTS_CACHE, exist_ok=True)
-        temp_aiff_path = os.path.join(DIR_TTS_CACHE, f"{h}.aiff")
+        temp_aiff_path = temp_mp3_path.replace(".mp3", ".aiff")
+
         subprocess.run(
             ["say", "-v", voice, "-o", temp_aiff_path, "--", text],
             check=True,
@@ -37,12 +43,7 @@ class TextToSpeechCache:
         return temp_mp3_path
 
 
-class Audible(ABC):
-    def get_audio(self) -> AudioSegment:
-        raise NotImplementedError()
-
-
-class Heading(Audible):
+class Heading:
     def __init__(self, text: str):
         self.text = text
 
@@ -50,8 +51,11 @@ class Heading(Audible):
         temp_file_path = TextToSpeechCache.get_mp3(self.text, voice="Jamie")
         return AudioSegment.from_mp3(temp_file_path)
 
+    def n_words(self) -> int:
+        return len(self.text.split())
 
-class Paragraph(Audible):
+
+class Paragraph:
     def __init__(self, text: str):
         self.text = text
 
@@ -59,8 +63,11 @@ class Paragraph(Audible):
         temp_file_path = TextToSpeechCache.get_mp3(self.text, voice="Serena")
         return AudioSegment.from_mp3(temp_file_path)
 
+    def n_words(self) -> int:
+        return len(self.text.split())
 
-class Chapter(Audible):
+
+class Chapter:
     T_SILENCE_BEFORE_HEADING_MS = 250
     T_SILENCE_AFTER_HEADING_MS = 500
     T_SILENCE_AFTER_PARAGRAPH_MS = 250
@@ -87,8 +94,32 @@ class Chapter(Audible):
 
         return audio
 
+    def get_text(self) -> str:
+        text = f"{self.title}\n"
+        for para in self.paragraphs:
+            text += f"{para.text}\n"
+        return text.strip()
 
-class DocxFile(Audible):
+    def n_words(self) -> int:
+        return sum(para.n_words() for para in self.paragraphs) + len(
+            self.title.split()
+        )
+
+    def build_audio(self, output_chapters_dir):
+        temp_file_path = TextToSpeechCache.get_temp_mp3_path(self.get_text())
+        if not os.path.exists(temp_file_path):
+            chapter_audio = self.get_audio()
+            chapter_audio.export(temp_file_path, format="mp3")
+
+        chapter_file_path = os.path.join(
+            output_chapters_dir,
+            f"chapter-{self.i_chapter:02d}.mp3",
+        )
+        if not os.path.exists(chapter_file_path):
+            shutil.copy(temp_file_path, chapter_file_path)
+
+
+class DocxFile:
     def __init__(self, file_path: str):
         self.file_path = file_path
 
@@ -127,6 +158,9 @@ class DocxFile(Audible):
 
         return chapters
 
+    def n_words(self) -> int:
+        return sum(chapter.n_words() for chapter in self.chapters)
+
     def get_audio(self) -> AudioSegment:
         audio = AudioSegment.silent(duration=0)
         for chapter in self.chapters:
@@ -135,21 +169,24 @@ class DocxFile(Audible):
 
     def build_audio(self):
         output_dir = os.path.splitext(self.file_path)[0] + ".audio"
+        shutil.rmtree(output_dir, ignore_errors=True)
         os.makedirs(output_dir, exist_ok=True)
+
+        n_words = self.n_words()
+        print(f"word-count: {n_words}")
 
         # chapters
         output_chapters_dir = os.path.join(output_dir, "chapters")
         os.makedirs(output_chapters_dir, exist_ok=True)
 
-        for chapter in tqdm(self.chapters, desc="Chapters", unit="ch"):
-            chapter_audio = chapter.get_audio()
-            chapter_file_path = os.path.join(
-                output_chapters_dir, f"chapter-{chapter.i_chapter:02d}.mp3"
-            )
-            chapter_audio.export(chapter_file_path, format="mp3")
+        with tqdm(total=n_words, desc="Converting", unit="word") as pbar:
+            for chapter in self.chapters:
+                chapter.build_audio(output_chapters_dir)
+                pbar.update(chapter.n_words())
 
         # docx
         audio = self.get_audio()
         output_file_path = os.path.join(output_dir, "docx.mp3")
         audio.export(output_file_path, format="mp3")
+        print(f"✅ {output_file_path} complete.")
         print(f"Audio exported to {output_file_path}")
