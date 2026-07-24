@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,6 +9,11 @@ from functools import cached_property
 from docx import Document
 from pydub import AudioSegment
 from tqdm import tqdm
+
+
+def _to_kebab(text: str) -> str:
+    text = re.sub(r"[^\w\s]", "", text.lower())
+    return re.sub(r"[\s_]+", "-", text).strip("-")
 
 
 class TextToSpeechCache:
@@ -113,19 +119,23 @@ class Chapter:
             para.n_words() for para in self.paragraphs
         )
 
-    def build_audio(self, output_chapters_dir):
+    @cached_property
+    def file_name(self) -> str:
+        return f"{self.i_chapter:02d}-{_to_kebab(self.heading.text)}.mp3"
+
+    def build_audio(self, output_chapters_dir) -> str:
         temp_file_path = TextToSpeechCache.get_temp_mp3_path(self.get_text())
         if not os.path.exists(temp_file_path):
             chapter_audio = self.get_audio()
             chapter_audio.export(temp_file_path, format="mp3")
 
-        file_name = f"chapter-{self.i_chapter:02d}.mp3"
         chapter_file_path = os.path.join(
             output_chapters_dir,
-            file_name,
+            self.file_name,
         )
         if not os.path.exists(chapter_file_path):
             shutil.copy(temp_file_path, chapter_file_path)
+        return chapter_file_path
 
 
 class DocxFile:
@@ -196,11 +206,10 @@ class DocxFile:
                 book_pbar.set_description(
                     f"Chapter {i_chapter:02d}/{n_chapters}"
                 )
-                chapter.build_audio(output_chapters_dir)
+                chapter_file_path = chapter.build_audio(output_chapters_dir)
                 book_pbar.update(1)
-                tqdm.write(
-                    f"✅ chapter {i_chapter:02d}/{n_chapters} complete."
-                )
+                size_mb = os.path.getsize(chapter_file_path) / 1e6
+                tqdm.write(f"✅ {chapter.file_name} ({size_mb:.2f} MB)")
 
         # docx
         with tqdm(
@@ -215,5 +224,5 @@ class DocxFile:
                 book_pbar.update(1)
         output_file_path = os.path.join(output_dir, "docx.mp3")
         audio.export(output_file_path, format="mp3")
-        print(f"✅ {output_file_path} complete.")
-        print(f"Audio exported to {output_file_path}")
+        size_mb = os.path.getsize(output_file_path) / 1e6
+        print(f"✅ {output_file_path} ({size_mb:.2f} MB)")
