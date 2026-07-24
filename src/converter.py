@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -17,11 +18,15 @@ VOICE_BODY = "Serena"
 
 PAUSE_BEFORE_HEADING_MS = 500
 PAUSE_AFTER_HEADING_MS = 500
+
 PAUSE_AFTER_PARAGRAPH_MS = 250
 
 MAX_CHUNK_MS = 60 * 60 * 1000
 
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "docx_to_mp3", "tts")
+FILE_CACHE_DIR = os.path.join(
+    tempfile.gettempdir(), "docx_to_mp3", "file_cache"
+)
 
 # Paragraph styles that represent metadata / navigation rather than content
 _SKIP_STYLE_PREFIXES = ("toc", "index", "bibliography", "caption")
@@ -50,6 +55,17 @@ def _is_metadata(paragraph):
 def _cache_path(text, voice):
     key = hashlib.sha256(f"{voice}:{text}".encode()).hexdigest()[:16]
     return os.path.join(CACHE_DIR, f"{key}.mp3")
+
+
+def _file_cache_dir(paragraphs):
+    """Return the cache directory for the assembled output of this exact set of paragraphs."""
+    parts = []
+    for para in paragraphs:
+        text = para.text.strip()
+        voice = VOICE_HEADING if _is_heading(para) else VOICE_BODY
+        parts.append(f"{voice}:{text}")
+    key = hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+    return os.path.join(FILE_CACHE_DIR, key)
 
 
 def _say_to_mp3(text, voice, output_path):
@@ -160,6 +176,30 @@ def convert(docx_path: str, output_dir: str) -> None:
     ]
     os.makedirs(output_dir, exist_ok=True)
 
+    # File-level cache: if all paragraphs are unchanged the assembled chunks
+    # are already stored; copy them to output_dir and return early.
+    file_cache = _file_cache_dir(paragraphs)
+    cached_chunks = (
+        sorted([f for f in os.listdir(file_cache) if f.endswith(".mp3")])
+        if os.path.isdir(file_cache)
+        else []
+    )
+    if cached_chunks:
+        console.print(
+            "[bold cyan]File unchanged — copying cached output.[/bold cyan]"
+        )
+        cached_paths = []
+        for name in cached_chunks:
+            src = os.path.join(file_cache, name)
+            dst = os.path.join(output_dir, name)
+            shutil.copy2(src, dst)
+            cached_paths.append(dst)
+        total_cached_ms = sum(
+            len(AudioSegment.from_mp3(p)) for p in cached_paths
+        )
+        _print_summary(output_dir, cached_paths, total_cached_ms, paragraphs)
+        return
+
     paths = []
     chunk_index = 1
     current_label = ""
@@ -214,7 +254,14 @@ def convert(docx_path: str, output_dir: str) -> None:
     if current_ms > 0:
         total_ms += current_ms
         paths.append(
-            _flush_chunk(current_audio, current_label, chunk_index, output_dir)
+            _flush_chunk(
+                current_audio, current_label, chunk_index, output_dir
+            )
         )
+
+    # Populate the file-level cache with the freshly generated chunks.
+    os.makedirs(file_cache, exist_ok=True)
+    for p in paths:
+        shutil.copy2(p, os.path.join(file_cache, os.path.basename(p)))
 
     _print_summary(output_dir, paths, total_ms, paragraphs)
