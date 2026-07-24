@@ -80,21 +80,26 @@ class Chapter:
         self.heading = heading
         self.paragraphs = paragraphs
 
-    def get_audio(self, pbar) -> AudioSegment:
-        audio = (
-            AudioSegment.silent(duration=self.T_SILENCE_BEFORE_HEADING_MS)
-            + self.heading.get_audio()
-            + AudioSegment.silent(duration=self.T_SILENCE_AFTER_HEADING_MS)
-        )
-        pbar.update(self.heading.n_words())
-
-        for para in self.paragraphs:
-            audio += para.get_audio()
-            audio += AudioSegment.silent(
-                duration=self.T_SILENCE_AFTER_PARAGRAPH_MS
+    def get_audio(self) -> AudioSegment:
+        with tqdm(
+            total=self.n_words(),
+            desc=f"Chapter {self.i_chapter:02d}",
+            unit="word",
+            position=1,
+            leave=False,
+        ) as pbar:
+            audio = (
+                AudioSegment.silent(duration=self.T_SILENCE_BEFORE_HEADING_MS)
+                + self.heading.get_audio()
+                + AudioSegment.silent(duration=self.T_SILENCE_AFTER_HEADING_MS)
             )
-            pbar.update(para.n_words())
-
+            pbar.update(self.heading.n_words())
+            for para in self.paragraphs:
+                audio += para.get_audio()
+                audio += AudioSegment.silent(
+                    duration=self.T_SILENCE_AFTER_PARAGRAPH_MS
+                )
+                pbar.update(para.n_words())
         return audio
 
     def get_text(self) -> str:
@@ -108,13 +113,11 @@ class Chapter:
             para.n_words() for para in self.paragraphs
         )
 
-    def build_audio(self, output_chapters_dir, pbar):
+    def build_audio(self, output_chapters_dir):
         temp_file_path = TextToSpeechCache.get_temp_mp3_path(self.get_text())
         if not os.path.exists(temp_file_path):
-            chapter_audio = self.get_audio(pbar=pbar)
+            chapter_audio = self.get_audio()
             chapter_audio.export(temp_file_path, format="mp3")
-        else:
-            pbar.update(self.n_words())
 
         file_name = f"chapter-{self.i_chapter:02d}.mp3"
         chapter_file_path = os.path.join(
@@ -185,18 +188,31 @@ class DocxFile:
         output_chapters_dir = os.path.join(output_dir, "chapters")
         os.makedirs(output_chapters_dir, exist_ok=True)
 
+        n_chapters = len(self.chapters)
         with tqdm(
-            total=n_words, desc="Building chapters", unit="word"
-        ) as pbar:
-            n_chapters = len(self.chapters)
+            total=n_chapters, desc="Book", unit="ch", position=0
+        ) as book_pbar:
             for i_chapter, chapter in enumerate(self.chapters, start=1):
-                chapter.build_audio(output_chapters_dir, pbar)
+                book_pbar.set_description(
+                    f"Chapter {i_chapter:02d}/{n_chapters}"
+                )
+                chapter.build_audio(output_chapters_dir)
+                book_pbar.update(1)
                 tqdm.write(
                     f"✅ chapter {i_chapter:02d}/{n_chapters} complete."
                 )
 
         # docx
-        audio = self.get_audio()
+        with tqdm(
+            total=n_chapters, desc="Merging", unit="ch", position=0
+        ) as book_pbar:
+            audio = AudioSegment.silent(duration=0)
+            for i_chapter, chapter in enumerate(self.chapters, start=1):
+                book_pbar.set_description(
+                    f"Merging {i_chapter:02d}/{n_chapters}"
+                )
+                audio += chapter.get_audio()
+                book_pbar.update(1)
         output_file_path = os.path.join(output_dir, "docx.mp3")
         audio.export(output_file_path, format="mp3")
         print(f"✅ {output_file_path} complete.")
