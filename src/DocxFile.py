@@ -214,19 +214,3 @@ class DocxFile:
                 book_pbar.update(1)
                 size_mb = os.path.getsize(chapter_file_path) / 1e6
                 tqdm.write(f"✅ {chapter.file_name} ({size_mb:.2f} MB)")
-
-        # docx
-        with tqdm(
-            total=n_chapters, desc="Merging", unit="ch", position=0
-        ) as book_pbar:
-            audio = AudioSegment.silent(duration=0)
-            for i_chapter, chapter in enumerate(self.chapters, start=1):
-                book_pbar.set_description(
-                    f"Merging {i_chapter:02d}/{n_chapters}"
-                )
-                audio += chapter.get_audio()
-                book_pbar.update(1)
-        output_file_path = os.path.join(output_dir, "docx.mp3")
-        audio.export(output_file_path, format="mp3")
-        size_mb = os.path.getsize(output_file_path) / 1e6
-        print(f"✅ {output_file_path} ({size_mb:.2f} MB)")
