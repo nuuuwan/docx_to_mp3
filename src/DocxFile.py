@@ -40,7 +40,7 @@ class TextToSpeechCache:
             temp_mp3_path, format="mp3"
         )
         os.unlink(temp_aiff_path)
-        print(f"{temp_mp3_path} <- {voice}: {text}")
+        # print(f"{temp_mp3_path} <- {voice}: {text}")
         return temp_mp3_path
 
 
@@ -112,9 +112,10 @@ class Chapter:
             chapter_audio = self.get_audio()
             chapter_audio.export(temp_file_path, format="mp3")
 
+        file_name = f"chapter-{self.i_chapter:02d}.mp3"
         chapter_file_path = os.path.join(
             output_chapters_dir,
-            f"chapter-{self.i_chapter:02d}.mp3",
+            file_name,
         )
         if not os.path.exists(chapter_file_path):
             shutil.copy(temp_file_path, chapter_file_path)
@@ -180,10 +181,13 @@ class DocxFile:
         output_chapters_dir = os.path.join(output_dir, "chapters")
         os.makedirs(output_chapters_dir, exist_ok=True)
 
-        with tqdm(total=n_words, desc="Converting", unit="word") as pbar:
-            for chapter in self.chapters:
+        with tqdm(
+            total=n_words, desc="Building chapters", unit="word"
+        ) as pbar:
+            for i, chapter in enumerate(self.chapters):
                 chapter.build_audio(output_chapters_dir)
                 pbar.update(chapter.n_words())
+                tqdm.write(f"✅ chapter-{i+1:02d}.mp3 complete.")
 
         # docx
         audio = self.get_audio()
