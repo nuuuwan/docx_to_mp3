@@ -74,43 +74,47 @@ class Chapter:
     T_SILENCE_AFTER_PARAGRAPH_MS = 250
 
     def __init__(
-        self, i_chapter: int, title: str, paragraphs: list[Paragraph]
+        self, i_chapter: int, heading: Heading, paragraphs: list[Paragraph]
     ):
         self.i_chapter = i_chapter
-        self.title = title
+        self.heading = heading
         self.paragraphs = paragraphs
 
-    def get_audio(self) -> AudioSegment:
+    def get_audio(self, pbar) -> AudioSegment:
         audio = (
             AudioSegment.silent(duration=self.T_SILENCE_BEFORE_HEADING_MS)
-            + Heading(self.title).get_audio()
+            + self.heading.get_audio()
             + AudioSegment.silent(duration=self.T_SILENCE_AFTER_HEADING_MS)
         )
+        pbar.update(self.heading.n_words())
 
         for para in self.paragraphs:
             audio += para.get_audio()
             audio += AudioSegment.silent(
                 duration=self.T_SILENCE_AFTER_PARAGRAPH_MS
             )
+            pbar.update(para.n_words())
 
         return audio
 
     def get_text(self) -> str:
-        text = f"{self.title}\n"
+        text = f"{self.heading.text}\n"
         for para in self.paragraphs:
             text += f"{para.text}\n"
         return text.strip()
 
     def n_words(self) -> int:
-        return sum(para.n_words() for para in self.paragraphs) + len(
-            self.title.split()
+        return self.heading.n_words() + sum(
+            para.n_words() for para in self.paragraphs
         )
 
-    def build_audio(self, output_chapters_dir):
+    def build_audio(self, output_chapters_dir, pbar):
         temp_file_path = TextToSpeechCache.get_temp_mp3_path(self.get_text())
         if not os.path.exists(temp_file_path):
-            chapter_audio = self.get_audio()
+            chapter_audio = self.get_audio(pbar=pbar)
             chapter_audio.export(temp_file_path, format="mp3")
+        else:
+            pbar.update(self.n_words())
 
         file_name = f"chapter-{self.i_chapter:02d}.mp3"
         chapter_file_path = os.path.join(
@@ -129,31 +133,31 @@ class DocxFile:
     def chapters(self):
         doc = Document(self.file_path)
         chapters = []
-        current_chapter_title = None
+        current_heading = None
         current_paragraphs = []
 
         for para in doc.paragraphs:
             if para.text.strip() == "":
                 continue
             if para.style.name.startswith("Heading"):
-                if current_chapter_title is not None:
+                if current_heading is not None:
                     chapters.append(
                         Chapter(
                             len(chapters) + 1,
-                            current_chapter_title,
+                            current_heading,
                             current_paragraphs,
                         )
                     )
-                current_chapter_title = para.text
+                current_heading = Heading(para.text)
                 current_paragraphs = []
             else:
                 current_paragraphs.append(Paragraph(para.text))
 
-        if current_chapter_title is not None:
+        if current_heading is not None:
             chapters.append(
                 Chapter(
                     len(chapters) + 1,
-                    current_chapter_title,
+                    current_heading,
                     current_paragraphs,
                 )
             )
@@ -184,10 +188,12 @@ class DocxFile:
         with tqdm(
             total=n_words, desc="Building chapters", unit="word"
         ) as pbar:
-            for i, chapter in enumerate(self.chapters):
-                chapter.build_audio(output_chapters_dir)
-                pbar.update(chapter.n_words())
-                tqdm.write(f"✅ chapter-{i+1:02d}.mp3 complete.")
+            n_chapters = len(self.chapters)
+            for i_chapter, chapter in enumerate(self.chapters, start=1):
+                chapter.build_audio(output_chapters_dir, pbar)
+                tqdm.write(
+                    f"✅ chapter {i_chapter:02d}/{n_chapters} complete."
+                )
 
         # docx
         audio = self.get_audio()
