@@ -83,7 +83,7 @@ class Chapter:
     def get_audio(self) -> AudioSegment:
         with tqdm(
             total=self.n_words(),
-            desc=f"Chapter {self.i_chapter:02d}",
+            desc=f"  Chapter {self.i_chapter:02d}",
             unit="word",
             position=1,
             leave=False,
